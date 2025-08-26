@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Dog Run — Emoji Game</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root {
+      --ground-h: 120px;
+      --dog-size: 64px;
+      --obstacle-size: 48px;
+      --jump-height: 160px;
+    }
+
+    html,body {
+      height: 100%;
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+      background: linear-gradient(#b3ecff, #eaf6ff);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .game-wrap {
+      width: min(900px, 96vw);
+      height: 420px;
+      background: linear-gradient(180deg, #fff 0%, #f6fbff 60%);
+      border-radius: 12px;
+      box-shadow: 0 12px 36px rgba(10,30,60,.12);
+      overflow: hidden;
+      position: relative;
+      user-select: none;
+    }
+
+    /* ground */
+    .ground {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: var(--ground-h);
+      background: linear-gradient(#5fb86a, #3e9a4a);
+      display: flex;
+      align-items: center;
+      padding-left: 28px;
+      box-sizing: border-box;
+      gap: 12px;
+    }
+    .ground::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: var(--ground-h);
+      height: 6px;
+      background: rgba(0,0,0,0.04);
+    }
+
+    /* the dog is an emoji inside this element */
+    .dog {
+      position: absolute;
+      left: 110px;
+      bottom: var(--ground-h);
+      width: var(--dog-size);
+      height: var(--dog-size);
+      font-size: 56px;
+      line-height: 1;
+      transform-origin: center bottom;
+      transition: transform 120ms linear;
+      will-change: transform, bottom;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+
+    /* obstacle */
+    .obstacle {
+      position: absolute;
+      right: -80px;
+      bottom: calc(var(--ground-h) + 6px);
+      width: var(--obstacle-size);
+      height: var(--obstacle-size);
+      font-size: 40px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      will-change: transform;
+    }
+
+    /* UI (score, message) */
+    .hud {
+      position: absolute;
+      left: 18px;
+      top: 12px;
+      color: #123;
+      font-weight: 600;
+      font-size: 16px;
+      background: rgba(255,255,255,0.6);
+      padding: 6px 10px;
+      border-radius: 10px;
+      backdrop-filter: blur(6px);
+    }
+    .center-msg {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+    .panel {
+      pointer-events: auto;
+      background: rgba(255,255,255,0.98);
+      padding: 18px 22px;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(10,30,60,.08);
+      text-align: center;
+    }
+    button {
+      margin-top: 10px;
+      border: none;
+      background: #2b8cff;
+      color: white;
+      padding: 10px 14px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    button:active { transform: translateY(1px); }
+
+    .hint { margin-top: 8px; color: #345; opacity: 0.85; font-size: 13px; }
+
+    /* accessibility: respect reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      .obstacle, .dog { transition: none; animation: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="game-wrap" id="game" aria-label="Dog running game" role="application">
+    <div class="hud" id="score">Score: 0</div>
+
+    <!-- dog emoji used as the player sprite -->
+    <div class="dog" id="dog" aria-hidden="true">🐕‍🦺</div>
+
+    <!-- obstacle(s) will be created via JS -->
+    <div class="ground" aria-hidden="true">
+      <div style="font-size:14px;color:#eaf9ea;font-weight:700">🌿</div>
+      <div style="opacity:.9;color:#eaf9ea">Run!</div>
+    </div>
+
+    <div class="center-msg" id="centerMsg">
+      <div class="panel" id="startPanel">
+        <h2 style="margin:0 0 6px 0">Dog Run 🐕</h2>
+        <div>Jump over bones and get the highest score!</div>
+        <div class="hint">Press <strong>Space</strong> or click/tap to jump.</div>
+        <button id="startBtn">Start</button>
+      </div>
+
+      <div class="panel" id="gameOverPanel" style="display:none">
+        <h2 style="margin:0 0 6px 0">Game Over</h2>
+        <div id="finalScore">Score: 0</div>
+        <button id="restartBtn">Play Again</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* Simple runner game:
+       - Dog: controlled by jump (space / click / tap)
+       - Obstacles: bone emoji (🦴) spawn from the right and move left
+       - If dog collides with obstacle -> game over
+       - Score increases with time / passing obstacles
+    */
+
+    const game = document.getElementById('game');
+    const dogEl = document.getElementById('dog');
+    const scoreEl = document.getElementById('score');
+    const centerMsg = document.getElementById('centerMsg');
+    const startBtn = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const startPanel = document.getElementById('startPanel');
+    const gameOverPanel = document.getElementById('gameOverPanel');
+    const finalScore = document.getElementById('finalScore');
+
+    let gravity = 0.9;
+    let jumpSpeed = 16;
+    let dog = {
+      x: 110,
+      y: 0, // distance above ground
+      vy: 0,
+      w: 64,
+      h: 64,
+      jumping: false
+    };
+
+    let obstacles = [];
+    let running = false;
+    let lastTime = 0;
+    let spawnTimer = 0;
+    let spawnInterval = 1500; // ms
+    let speed = 320; // pixels per second (obstacle speed)
+    let score = 0;
+
+    // helper: create an obstacle DOM & object
+    function spawnObstacle() {
+      const el = document.createElement('div');
+      el.className = 'obstacle';
+      el.textContent = '🦴'; // bone emoji as obstacle
+      game.appendChild(el);
+
+      const rect = game.getBoundingClientRect();
+      const startX = rect.width + 60;
+      const obstacle = {
+        el,
+        x: startX,
+        w: 48,
+        h: 48,
+        passed: false
+      };
+      obstacles.push(obstacle);
+    }
+
+    // jump logic
+    function jump() {
+      if (!running) return;
+      if (!dog.jumping) {
+        dog.vy = -jumpSpeed;
+        dog.jumping = true;
+        dogEl.style.transform = 'translateY(-6px) scale(1.02)';
+      }
+    }
+
+    // collision: simple AABB using game coordinates
+    function isColliding(d, o) {
+      const dogLeft = d.x;
+      const dogRight = d.x + d.w;
+      const dogBottom = d.y + d.h;
+      const dogTop = d.y;
+
+      const obsLeft = o.x;
+      const obsRight = o.x + o.w;
+      const obsBottom = 0 + o.h; // obstacles sit on the ground, so y = 0
+      const obsTop = 0;
+
+      // convert dog y to ground-based coords:
+      // here, dog.y is vertical offset above ground (0 = ground)
+      const dogTopGlobal = d.h + ( - d.y ); // not necessary precise; we'll compute bounding rects from DOM for reliability
+      // Use DOM bounding boxes instead for better accuracy
+      const dogRect = dogEl.getBoundingClientRect();
+      const obsRect = o.el.getBoundingClientRect();
+
+      return !(dogRect.right < obsRect.left ||
+               dogRect.left > obsRect.right ||
+               dogRect.bottom < obsRect.top ||
+               dogRect.top > obsRect.bottom);
+    }
+
+    // start game
+    function startGame() {
+      // reset state
+      obstacles.forEach(o => o.el.remove());
+      obstacles = [];
+      running = true;
+      dog.y = 0;
+      dog.vy = 0;
+      dog.jumping = false;
+      spawnTimer = 0;
+      score = 0;
+      speed = 320;
+      scoreEl.textContent = 'Score: 0';
+      startPanel.style.display = 'none';
+      gameOverPanel.style.display = 'none';
+      centerMsg.style.pointerEvents = 'none';
+      lastTime = performance.now();
+      requestAnimationFrame(loop);
+    }
+
+    function endGame() {
+      running = false;
+      // show game over
+      finalScore.textContent = 'Score: ' + Math.floor(score);
+      gameOverPanel.style.display = 'block';
+      startPanel.style.display = 'none';
+      centerMsg.style.pointerEvents = 'auto';
+    }
+
+    // main loop
+    function loop(now) {
+      if (!running) return;
+      const dt = Math.min(40, now - lastTime); // ms
+      lastTime = now;
+
+      // move obstacles
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const o = obstacles[i];
+        o.x -= (speed * dt) / 1000;
+        o.el.style.transform = `translateX(${o.x}px)`;
+        if (!o.passed && o.x + o.w < dog.x) {
+          o.passed = true;
+          score += 10; // bonus for passing an obstacle
+        }
+        if (o.x + o.w < -200) {
+          // remove off-screen
+          o.el.remove();
+          obstacles.splice(i,1);
+        }
+      }
+
+      // spawn new obstacles
+      spawnTimer += dt;
+      if (spawnTimer > spawnInterval) {
+        spawnObstacle();
+        spawnTimer = 0;
+        // optional: gradually speed up the game and tighten spawn interval
+        if (spawnInterval > 700) spawnInterval -= 40;
+        speed += 6;
+      }
+
+      // dog physics: treat bottom as ground (y = 0)
+      dog.vy += gravity;
+      dog.y += dog.vy;
+      if (dog.y > 0) { // landed
+        dog.y = 0;
+        dog.vy = 0;
+        dog.jumping = false;
+        dogEl.style.transform = 'translateY(0)';
+      } else {
+        // apply jump translate (negative y moves dog up)
+        dogEl.style.transform = `translateY(${dog.y}px)`;
+      }
+
+      // update score over time
+      score += (dt / 1000) * 4; // continuous scoring
+      scoreEl.textContent = 'Score: ' + Math.floor(score);
+
+      // check collisions
+      for (const o of obstacles) {
+        if (isColliding(dog, o)) {
+          endGame();
+          return;
+        }
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // input handlers
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        if (!running) startGame();
+        else jump();
+      }
+    });
+
+    // click/tap to jump / start
+    game.addEventListener('pointerdown', (e) => {
+      if (!running) startGame();
+      else jump();
+    });
+
+    startBtn.addEventListener('click', startGame);
+    restartBtn.addEventListener('click', startGame);
+
+    // initialize dog position visually (on load)
+    window.addEventListener('load', () => {
+      dogEl.style.left = dog.x + 'px';
+      // ensure obstacle container transform origin is correct
+    });
+
+    // small accessibility: pause if tab hidden
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && running) {
+        // stop the loop gracefully and consider it game over
+        endGame();
+      }
+    });
+  </script>
+</body>
+</html>
